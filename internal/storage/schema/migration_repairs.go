@@ -691,25 +691,11 @@ func wispDependenciesSplitTargetBackfillSQL() []string {
 }
 
 func schemaTableExists(ctx context.Context, db DBConn, table string) (bool, error) {
-	var count int
-	if err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
-		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
-	`, table).Scan(&count); err != nil {
-		return false, err
-	}
-	return count > 0, nil
+	return showTableExists(ctx, db, table)
 }
 
 func schemaColumnExists(ctx context.Context, db DBConn, table, column string) (bool, error) {
-	var count int
-	if err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
-	`, table, column).Scan(&count); err != nil {
-		return false, err
-	}
-	return count > 0, nil
+	return showColumnExists(ctx, db, table, column)
 }
 
 // schemaHasPrimaryKey reports whether table currently carries a PRIMARY KEY

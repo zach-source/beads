@@ -122,14 +122,11 @@ func (s auxRekeyState) pending() bool { return s.resume || len(s.drifted) > 0 }
 // into the migration commit.
 func readAuxRekeyState(ctx context.Context, db DBConn, sentinelKeys ...string) (auxRekeyState, error) {
 	var state auxRekeyState
-	var tableCount int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'local_metadata'`,
-	).Scan(&tableCount); err != nil {
+	hasTable, err := showTableExists(ctx, db, "local_metadata")
+	if err != nil {
 		return state, err
 	}
-	if tableCount == 0 {
+	if !hasTable {
 		return state, nil
 	}
 	placeholders := make([]string, 0, len(sentinelKeys)+1)

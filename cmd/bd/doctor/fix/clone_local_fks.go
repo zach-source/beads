@@ -3,6 +3,7 @@ package fix
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // CloneLocalFK describes a foreign key held by a clone-local (dolt_ignored,
@@ -67,28 +68,25 @@ func ScanSeveredCloneLocalFKs(path string) ([]SeveredCloneLocalFK, error) {
 }
 
 func scanSeveredCloneLocalFKs(db *sql.DB) ([]SeveredCloneLocalFK, error) {
+	// SHOW rather than INFORMATION_SCHEMA: Dolt evaluates INFORMATION_SCHEMA
+	// across every database on the server before filtering, so on a shared
+	// server each of these probes took 5-25s. SHOW reads the current database.
+	tables, err := showFullTables(db)
+	if err != nil {
+		return nil, fmt.Errorf("list tables: %w", err)
+	}
 	var severed []SeveredCloneLocalFK
 	for _, fk := range CloneLocalFKs {
-		var tables int
-		if err := db.QueryRow(
-			`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
-			fk.Table,
-		).Scan(&tables); err != nil {
-			return nil, fmt.Errorf("check %s exists: %w", fk.Table, err)
-		}
-		if tables == 0 {
+		if !tables[strings.ToLower(fk.Table)] {
 			continue
 		}
 
-		var constraints int
-		if err := db.QueryRow(
-			`SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
-			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND CONSTRAINT_TYPE = 'FOREIGN KEY'`,
-			fk.Table, fk.Constraint,
-		).Scan(&constraints); err != nil {
+		var name, ddl string
+		//nolint:gosec // G201: identifiers come from the fixed CloneLocalFKs spec above, not user input.
+		if err := db.QueryRow(fmt.Sprintf("SHOW CREATE TABLE `%s`", fk.Table)).Scan(&name, &ddl); err != nil {
 			return nil, fmt.Errorf("check %s.%s: %w", fk.Table, fk.Constraint, err)
 		}
-		if constraints > 0 {
+		if strings.Contains(strings.ToLower(ddl), strings.ToLower("CONSTRAINT `"+fk.Constraint+"` FOREIGN KEY")) {
 			continue
 		}
 
@@ -172,4 +170,23 @@ func relinkSeveredCloneLocalFKs(db *sql.DB, verbose bool) error {
 		fmt.Printf("  ✓ Re-linked %s.%s (%d orphaned row(s) removed)\n", fk.Table, fk.Constraint, fk.Orphans)
 	}
 	return nil
+}
+
+// showFullTables returns the current database's table and view names,
+// lowercased (INFORMATION_SCHEMA compared them case-insensitively).
+func showFullTables(db *sql.DB) (map[string]bool, error) {
+	rows, err := db.Query("SHOW FULL TABLES")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	tables := map[string]bool{}
+	for rows.Next() {
+		var name, kind string
+		if err := rows.Scan(&name, &kind); err != nil {
+			return nil, err
+		}
+		tables[strings.ToLower(name)] = true
+	}
+	return tables, rows.Err()
 }
